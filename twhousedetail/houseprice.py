@@ -6,7 +6,7 @@ from twhousedetail.web import get_page_source
 from twhousedetail.community import Community
 
 
-class HousePrice(Community):
+class HousePriceCommunity(Community):
     @staticmethod
     def prefix():
         return 'price'
@@ -54,7 +54,7 @@ class HousePrice(Community):
                   '待售筆數', '待售總價', '議價率', '交通', '學校', '醫療', '購物',
                   '嫌惡設施', '連結']
         print('\t'.join(titles))
-        print('-' * len('\t'.join(titles)))
+        print('-' * (len(titles) * 2 * 4))
 
 
 class Building:
@@ -164,3 +164,154 @@ class Building:
                   car, garbage, to_sell, to_sell_range, bargain_content,
                   traffic, school, hospital, shopping, nimby, url]
         return '\t'.join(result)
+
+
+class HousePriceSales:
+    def __init__(self):
+        self._prefix = 'price-buy'
+        if not os.path.exists(self._prefix):
+            os.mkdir(self._prefix)
+
+    def _html_path(self, html_name):
+        return f'{self._prefix}/{html_name}.html'
+
+    def _result_path(self):
+        return f'{self._prefix}.txt'
+
+    def save(self, url):
+        count = 0
+        soup = BeautifulSoup(get_page_source(url, minimize=True),
+                             'html.parser')
+        for sale in soup.find_all('li', {
+            'class': 'bg-white border-solid flex space-x-5 border-gray-200 text-base py-10 px-6 text-c-dark-900 group align-middle hover:bg-[#f8f7f6] border-b'}):
+            url = self._get_url(sale)
+            count += 1
+            url_sequence_number = url[len('https://buy.houseprice.tw/house/'):]
+            html_name = url_sequence_number.split('/')[0]
+            if os.path.exists(self._html_path(html_name)):
+                continue
+            url = 'https://buy.houseprice.tw/house/' + html_name
+            print(f'Save {url} to {self._html_path(html_name)} ...')
+            with open(self._html_path(html_name), 'w') as fp:
+                fp.write(get_page_source(url, minimize=True))
+        print(f'Total: {count}')
+
+    def _get_url(self, sale):
+        for a in sale.find_all('a'):
+            url = a.get('href')
+            if url and 'buy' in url:
+                return url
+
+    def show(self):
+        count = 0
+        self._show_titles()
+        with open(self._result_path(), 'w') as fp:
+            for file in os.listdir(self._prefix):
+                count += 1
+                name, _ = os.path.splitext(file)
+                result = self._get_sale(name)
+                print(result)
+                fp.write(f'{result}\n')
+        print(f'Total: {count}')
+        print(f'Saved to {self._result_path()}')
+
+    def _get_sale(self, name):
+        with open(self._html_path(name), 'r') as fp:
+            html_doc = fp.read()
+        soup = BeautifulSoup(html_doc, 'html.parser')
+        vue_container = soup.find('div', {'id': 'vue-container'})
+        case_info = vue_container.find('section',
+                                       {'class': 'case_info buyHouse_info'})
+        address = ''
+        for p in case_info.find_all('p'):
+            if not p:
+                continue
+            if '地址' in p.text:
+                address = p.text[len('地址 / '):]
+        sale_price = price_per_size = total_size = main_size = land_size = ''
+        for li in case_info.find_all('li'):
+            if not li:
+                continue
+            if '最低' in li.text:
+                sale_price = li.text[len('最低'):-1]
+            elif '每坪' in li.text:
+                price_per_size = li.text[len('每坪'):-1]
+            elif '主建物' in li.text:
+                main_size = li.text.split()[2]
+            elif '建物' in li.text:
+                total_size = li.text.split()[2]
+            elif '土地' in li.text:
+                land_size = li.text.split()[2]
+        building_type = community = floor_info = car = height = age = ''
+        for br in case_info.find_all('br'):
+            if not br:
+                continue
+            if '型態' in br.next_sibling:
+                building_type = get_value(br.next_sibling)
+            elif '社區' in br.next_sibling:
+                community = get_value(br.next_sibling)
+            elif '格局' in br.next_sibling:
+                floor_info = get_value(br.next_sibling)
+            elif '車位' in br.next_sibling:
+                car = get_value(br.next_sibling)
+            elif '樓層' in br.next_sibling:
+                height = get_value(br.next_sibling)
+            elif '屋齡' in br.next_sibling:
+                age = get_value(br.next_sibling)[:-1]
+        feature = soup.select_one('a[title][href*=list]')
+        feature = feature.text if feature else ''
+        buy = soup.find('div', {'class': 'buyHouse_detail_tb_wrap close'})
+        similar = ''
+        if buy:
+            for td in buy.find_all('td'):
+                if '相似物件刊登' not in td.text:
+                    continue
+                similar = td.text[len('這個待售房屋，共有 '):-len(' 筆相似物件刊登')]
+        url = vue_container.find('a', {'class': 'cover-image'}).get('href')
+        result = [
+            community,
+            age,
+            height,
+            car,
+            total_size,
+            main_size,
+            land_size,
+            floor_info,
+            sale_price,
+            price_per_size,
+            similar,
+            feature,
+            building_type,
+            address,
+            url
+        ]
+        return '\t'.join(result)
+
+    @staticmethod
+    def _show_titles():
+        titles = [
+            '社區',
+            '屋齡',
+            '樓層',
+            '車位',
+            '建物',
+            '主建物',
+            '土地',
+            '格局',
+            '出價',
+            '單價',
+            '相似物件',
+            '特色',
+            '型態',
+            '地址',
+            '連結'
+        ]
+        print('\t'.join(titles))
+        print('-' * (len(titles) * 2 * 4))
+
+
+def get_value(br_text):
+    elements = []
+    for br in br_text.split('/'):
+        elements.append(br.replace(' ', ''))
+    return '/'.join(elements[1:])
